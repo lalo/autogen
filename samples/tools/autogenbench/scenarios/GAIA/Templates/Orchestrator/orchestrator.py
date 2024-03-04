@@ -3,7 +3,7 @@ import json
 import copy
 from string import Template
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Union, Callable, Literal, Tuple, TypedDict
+from typing import Dict, List, Optional, Type, TypeVar, Union, Callable, Literal, Tuple, TypedDict
 from autogen import Agent, ConversableAgent, OpenAIWrapper
 
 
@@ -114,6 +114,7 @@ class Criteria:
         "answer": {self.answer_spec}
     }}"""
 
+OT = TypeVar('OT', bound='Orchestrator')
 
 class Orchestrator(ConversableAgent):
     def __init__(
@@ -169,7 +170,7 @@ class Orchestrator(ConversableAgent):
             else:
                 self.send(message, a, request_reply=False, silent=True)
 
-    def _think_and_respond(self, messages, message, sender):
+    def _think_and_respond(self, messages:List[dict], message:str, sender:Optional[Agent]):
         messages.append({"role": "user", "content": message, "name": sender.name})
 
         response = self.client.create(
@@ -180,7 +181,7 @@ class Orchestrator(ConversableAgent):
         messages.append({"role": "assistant", "content": extracted_response, "name": self.name})
         return extracted_response
 
-    def _think_next_step(self, task, team, names, sender):
+    def _think_next_step(self, task:str, team:str, names:List[str], sender:Optional[Agent]):
         criteria_list = [
             Criteria(
                 name="is_request_satisfied",
@@ -228,7 +229,7 @@ class Orchestrator(ConversableAgent):
         self._print_thought(json.dumps(next_step, indent=4))
         return next_step
 
-    def _prepare_new_facts_and_plan(self, facts, sender, team):
+    def _prepare_new_facts_and_plan(self, facts, sender:Optional[Agent], team):
         self._print_thought("We aren't making progress. Let's reset.")
         new_facts_prompt = self._prompt_templates["rethink_facts"].substitute(prev_facts=facts).strip()
         facts = self._think_and_respond(self.orchestrated_messages, new_facts_prompt, sender)
@@ -265,13 +266,41 @@ class Orchestrator(ConversableAgent):
                 self._broadcast(reply, exclude=[a])
                 break
 
-    def _update_team_with_facts_and_plan(self, task, team, facts, plan):
+    def _update_team_with_facts_and_plan(self, task:str, team:str, facts:str, plan:str):
         team_update_prompt = (
             self._prompt_templates["team_update"].substitute(task=task, team=team, facts=facts, plan=plan).strip()
         )
         self.orchestrated_messages.append({"role": "assistant", "content": team_update_prompt, "name": self.name})
         self._broadcast(self.orchestrated_messages[-1])
         self._print_thought(self.orchestrated_messages[-1]["content"])
+
+    # proc_next_step -> decision_to_terminate -> move to state of termination
+    @staticmethod
+    def decision_to_terminate(CURRENT_STATE:str, context: Dict):
+        next_step = context["next_step"]
+        if next_step["is_request_satisfied"]["answer"]:
+            # return True, "TERMINATE"
+            CURRENT_STATE = "TERMINATE_TRUE"
+        return CURRENT_STATE
+
+    # proc_next_step -> update_local_state -> continue/reset_current_run_with_introspect
+    @staticmethod
+    def stall_update_and_check(CURRENT_STATE:str, context: Dict):
+        next_step = context["next_step"]
+        if "stalled_count" not in context:
+            context["stalled_count"] = 0
+
+        if next_step["is_progress_being_made"]["answer"]:
+            context["stalled_count"] -= 1
+            context["stalled_count"] = max(context["stalled_count"], 0)
+        else:
+            context["stalled_count"] += 1
+
+        if context["stalled_count"] >= 3:
+            # facts, plan = self._prepare_new_facts_and_plan(facts=facts, sender=sender, team=team)
+            # break
+            CURRENT_STATE = "INTROSPECT_AND_RESET"
+        return CURRENT_STATE
 
     def run_chat(
         self,
@@ -291,28 +320,30 @@ class Orchestrator(ConversableAgent):
 
         ##### Memory ####
 
+        METADATA = {}
+
         # Pop the last message, which is the task
-        task = _messages.pop()["content"]
+        METADATA["task"] = _messages.pop()["content"]
 
         # A reusable description of the team
-        team = "\n".join([a.name + ": " + a.description for a in self._agents])
-        names = ", ".join([a.name for a in self._agents])
+        METADATA["team"] = "\n".join([a.name + ": " + a.description for a in self._agents])
+        METADATA["names"] = ", ".join([a.name for a in self._agents])
 
         # A place to store relevant facts
-        facts = ""
+        METADATA["facts"] = ""
 
         # A place to store the plan
-        plan = ""
+        METADATA["plan"] = ""
 
         #################
 
         # Start by writing what we know
-        closed_book_prompt = self._prompt_templates["closed_book_prompt"].substitute(task=task).strip()
-        facts = self._think_and_respond(_messages, closed_book_prompt, sender)
+        closed_book_prompt = self._prompt_templates["closed_book_prompt"].substitute(task=METADATA["task"]).strip()
+        METADATA["facts"] = self._think_and_respond(_messages, closed_book_prompt, sender)
 
         # Make an initial plan
-        plan_prompt = self._prompt_templates["plan_prompt"].substitute(team=team).strip()
-        plan = self._think_and_respond(_messages, plan_prompt, sender)
+        plan_prompt = self._prompt_templates["plan_prompt"].substitute(team=METADATA["plan"]).strip()
+        METADATA["plan"] = self._think_and_respond(_messages, plan_prompt, sender)
 
         # Main loop
         total_turns = 0
@@ -324,36 +355,67 @@ class Orchestrator(ConversableAgent):
             for a in self._agents:
                 a.reset()
 
-            self._update_team_with_facts_and_plan(task=task, team=team, facts=facts, plan=plan)
+            self._update_team_with_facts_and_plan(**METADATA)
+
+            CURRENT_STATE = "OBTAIN_NEXTSTEP"
+            context = {}
+            context["PRE_EXECUTION_HOOKS"] = [Orchestrator.decision_to_terminate, Orchestrator.stall_update_and_check]
 
             # Inner loop
-            stalled_count = 0
             while total_turns < max_turns:
                 total_turns += 1
 
-                try:
-                    next_step = self._think_next_step(task=task, team=team, names=names, sender=sender)
-                except json.decoder.JSONDecodeError as e:
-                    # Something went wrong. Restart this loop.
-                    self._print_thought(str(e))
-                    break
+                # state of next_step -> proc_next_step/reset_current_run_without_introspect
+                if CURRENT_STATE == "OBTAIN_NEXTSTEP":
+                    total_turns += 1
+                    try:
+                        context["next_step"] = self._think_next_step(self, task=METADATA["task"], team=METADATA["team"], names=METADATA["names"], sender=sender)
+                        CURRENT_STATE = "PRE_EXECUTION_NEXTSTEP"
+                        continue
+                    except json.decoder.JSONDecodeError as e:
+                        # Something went wrong. Restart this loop.
+                        self._print_thought(str(e))
+                        # break
+                        CURRENT_STATE = "RESET"
 
-                if next_step["is_request_satisfied"]["answer"]:
+                elif CURRENT_STATE == "PRE_EXECUTION_NEXTSTEP":
+                    for func in context["PRE_EXECUTION_HOOKS"]:
+                        CURRENT_STATE = func(CURRENT_STATE, context)
+
+                        if CURRENT_STATE in ("TERMINATE_TRUE", "RESET", "INTROSPECT_AND_RESET"):
+                            break
+                    
+                    if "PRE_EXECUTION_NEXTSTEP" == CURRENT_STATE:
+                        CURRENT_STATE = "EXECUTE_NEXTSTEP"
+                        continue
+                    # check if satisfied, check if progress, break or exit or continue
+
+                elif CURRENT_STATE == "EXECUTE_NEXTSTEP":
+                    # actual execution of next step
+                    # next_state json -> move_conversation_forward -> move to state of next_step
+                    self._broadcast_next_step_and_request_reply(
+                        next_prompt=context["next_step"]["instruction_or_question"]["answer"],
+                        next_speaker=context["next_step"]["next_speaker"]["answer"],
+                    )
+                    CURRENT_STATE = "POST_EXECUTION_NEXTSTEP"
+                    continue
+                
+                elif CURRENT_STATE == "POST_EXECUTION_NEXTSTEP":
+                    CURRENT_STATE = "OBTAIN_NEXTSTEP"
+                    continue
+
+
+                ### RESET STATE / TERMINATE ###
+
+
+                if CURRENT_STATE == "INTROSPECT_AND_RESET":
+                    METADATA["facts"], METADATA["plan"] = self._prepare_new_facts_and_plan(facts=METADATA["facts"], sender=sender, team=METADATA["team"])
+                    CURRENT_STATE = "RESET"
+
+                if CURRENT_STATE == "TERMINATE_TRUE":
                     return True, "TERMINATE"
 
-                if next_step["is_progress_being_made"]["answer"]:
-                    stalled_count -= 1
-                    stalled_count = max(stalled_count, 0)
-                else:
-                    stalled_count += 1
-
-                if stalled_count >= 3:
-                    facts, plan = self._prepare_new_facts_and_plan(facts=facts, sender=sender, team=team)
+                if CURRENT_STATE == "RESET":
                     break
-
-                self._broadcast_next_step_and_request_reply(
-                    next_prompt=next_step["instruction_or_question"]["answer"],
-                    next_speaker=next_step["next_speaker"]["answer"],
-                )
 
         return True, "TERMINATE"
