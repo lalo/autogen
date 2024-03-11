@@ -134,6 +134,7 @@ class Orchestrator(ConversableAgent):
         llm_config: Optional[Union[Dict, Literal[False]]] = False,
         default_auto_reply: Optional[Union[str, Dict, None]] = "",
         prompt_templates: OrchestratorPromptTemplates = defaultPromptTemplates,
+        quantifier: ConversableAgent = None,
     ):
         super().__init__(
             name=name,
@@ -158,6 +159,8 @@ class Orchestrator(ConversableAgent):
         self.register_reply([Agent, None], ConversableAgent.check_termination_and_human_reply)
 
         self._prompt_templates = prompt_templates
+
+        self._quantifier = quantifier
 
     def _print_thought(self, message):
         print(self.name + " (thought)\n")
@@ -436,6 +439,14 @@ class Orchestrator(ConversableAgent):
                     CURRENT_STATE = "RESET"
 
                 if CURRENT_STATE == "TERMINATE_TRUE":
+                    m = {
+                        "role": "user",
+                        "content": 'Criteria: TERMINATE\nAccepted {"accepted_values": ["Appropriate", "Inappropriate"]\n, "description": "If we have a correct answer - is it ok to terminate?" task: 2+2=4}',
+                        "name": self.name,
+                    }
+                    reply = self._quantifier.generate_reply(messages=[m], sender=self)
+                    print("*******")
+                    print(reply)
                     return True, "TERMINATE"
 
                 if CURRENT_STATE == "RESET":

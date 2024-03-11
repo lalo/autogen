@@ -16,27 +16,31 @@ from orchestrator import Orchestrator
 testbed_utils.init()
 ##############################
 
+
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
+
 
 # Read the prompt
 PROMPT = ""
 with open("prompt.txt", "rt") as fh:
     PROMPT = fh.read().strip()
 
-config_list = autogen.config_list_from_json( "OAI_CONFIG_LIST",)
+config_list = autogen.config_list_from_json(
+    "OAI_CONFIG_LIST",
+)
 llm_config = testbed_utils.default_llm_config(config_list, timeout=300)
 llm_config["temperature"] = 0.1
 
 gpt4v_azure = {
-  "model": "gpt-4-turbo-v",
-  "base_url": config_list[0]["base_url"],
-  "api_key": config_list[0]["api_key"],
-  "max_retries": 65535,
-  "api_version": "2023-12-01-preview",
-  "max_tokens": 1000,
-  "api_type": "azure",
+    "model": "gpt-4-turbo-v",
+    "base_url": config_list[0]["base_url"],
+    "api_key": config_list[0]["api_key"],
+    "max_retries": 65535,
+    "api_version": "2023-12-01-preview",
+    "max_tokens": 1000,
+    "api_type": "azure",
 }
 
 summarizer_llm_config = llm_config
@@ -44,6 +48,7 @@ final_llm_config = llm_config
 
 client = autogen.OpenAIWrapper(**final_llm_config)
 mlm_client = autogen.OpenAIWrapper(**gpt4v_azure)
+
 
 def response_preparer(inner_messages):
 
@@ -94,8 +99,11 @@ If you are unable to determine the final answer, output 'FINAL ANSWER: Unable to
     # No answer
     if "unable to determine" in extracted_response.lower():
         print("\n>>>Making an educated guess.\n")
-        messages.append({"role": "assistant", "content": extracted_response })
-        messages.append({"role": "user", "content": """
+        messages.append({"role": "assistant", "content": extracted_response})
+        messages.append(
+            {
+                "role": "user",
+                "content": """
 I understand that a definitive answer could not be determined. Please make a well-informed EDUCATED GUESS based on the conversation.
 
 To output the educated guess, use the following template: EDUCATED GUESS: [YOUR EDUCATED GUESS]
@@ -104,13 +112,16 @@ ADDITIONALLY, your EDUCATED GUESS MUST adhere to any formatting instructions spe
 If you are asked for a number, express it numerically (i.e., with digits rather than words), don't use commas, and don't include units such as $ or percent signs unless specified otherwise.
 If you are asked for a string, don't use articles or abbreviations (e.g. for cities), unless specified otherwise. Don't output any final sentence punctuation such as '.', '!', or '?'.
 If you are asked for a comma separated list, apply the above rules depending on whether the elements are numbers or strings.
-""".strip()})
+""".strip(),
+            }
+        )
 
         response = client.create(context=None, messages=messages)
         extracted_response = client.extract_text_or_completion_object(response)[0]
-        return re.sub(r"EDUCATED GUESS:", "FINAL ANSWER:", extracted_response)  
+        return re.sub(r"EDUCATED GUESS:", "FINAL ANSWER:", extracted_response)
     else:
         return extracted_response
+
 
 assistant = autogen.AssistantAgent(
     "assistant",
@@ -149,10 +160,22 @@ web_surfer = WebSurferAgent(
     },
 )
 
+quantifier = autogen.AssistantAgent(
+    name="quantifier",
+    llm_config={"config_list": config_list, "max_retries": 10},
+    system_message="""You are a helpful assistant. You quantify the output of different tasks based on the given criteria. 
+The criterion is given in a dictionary format where each key is a distinct criteria. 
+The value of each key is a dictionary as follows {"description": criteria description , "accepted_values": possible accepted inputs for this key} 
+You are going to quantify each of the criteria for a given task based on the task description. 
+Return a dictionary where the keys are the criteria and the values are the assessed performance based on accepted values for each criteria. 
+Return only the dictionary.""",
+)
+
 maestro = Orchestrator(
     "orchestrator",
     agents=[assistant, user_proxy, web_surfer],
     llm_config=llm_config,
+    quantifier=quantifier,
 )
 
 filename = "__FILE_NAME__".strip()
@@ -162,8 +185,8 @@ if len(filename) > 0:
     relpath = os.path.join("coding", filename)
     filename_prompt = f"The question is about a file, document or image, which can be read from the file '{filename}' in current working directory."
 
-    mdconverter = MarkdownConverter( mlm_client=mlm_client)
-    mlm_prompt="""Write a detailed caption for this image. Pay special attention to any details that might be useful for someone answering the following:
+    mdconverter = MarkdownConverter(mlm_client=mlm_client)
+    mlm_prompt = """Write a detailed caption for this image. Pay special attention to any details that might be useful for someone answering the following:
 
 {PROMPT}
 """.strip()
