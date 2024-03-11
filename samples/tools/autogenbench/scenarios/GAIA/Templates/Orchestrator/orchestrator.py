@@ -250,7 +250,7 @@ class Orchestrator(ConversableAgent):
                 self._broadcast(reply, exclude=[a])
                 break
 
-    def _update_team_with_facts_and_plan(self, task: str, team: str, facts: str, plan: str):
+    def _update_team_with_facts_and_plan(self, task: str, team: str, facts: str, plan: str, **kwargs):
         team_update_prompt = (
             self._prompt_templates["team_update"].substitute(task=task, team=team, facts=facts, plan=plan).strip()
         )
@@ -379,7 +379,6 @@ class Orchestrator(ConversableAgent):
                     total_turns += 1
                     try:
                         context["next_step"] = self._think_next_step(
-                            self,
                             criteria_list=criteria_list,
                             task=METADATA["task"],
                             team=METADATA["team"],
