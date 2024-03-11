@@ -114,7 +114,9 @@ class Criteria:
         "answer": {self.answer_spec}
     }}"""
 
-OT = TypeVar('OT', bound='Orchestrator')
+
+OT = TypeVar("OT", bound="Orchestrator")
+
 
 class Orchestrator(ConversableAgent):
     def __init__(
@@ -170,7 +172,7 @@ class Orchestrator(ConversableAgent):
             else:
                 self.send(message, a, request_reply=False, silent=True)
 
-    def _think_and_respond(self, messages:List[dict], message:str, sender:Optional[Agent]):
+    def _think_and_respond(self, messages: List[dict], message: str, sender: Optional[Agent]):
         messages.append({"role": "user", "content": message, "name": sender.name})
 
         response = self.client.create(
@@ -181,30 +183,9 @@ class Orchestrator(ConversableAgent):
         messages.append({"role": "assistant", "content": extracted_response, "name": self.name})
         return extracted_response
 
-    def _think_next_step(self, task:str, team:str, names:List[str], sender:Optional[Agent]):
-        criteria_list = [
-            Criteria(
-                name="is_request_satisfied",
-                prompt_msg="Is the request fully satisfied? (True if complete, or False if the original request has yet to be SUCCESSFULLY addressed)",
-                answer_spec="boolean",
-            ),
-            Criteria(
-                name="is_progress_being_made",
-                prompt_msg="Are we making forward progress? (True if just starting, or recent messages are adding value. False if recent messages show evidence of being stuck in a reasoning or action loop, or there is evidence of significant barriers to success such as the inability to read from a required file)",
-                answer_spec="boolean",
-            ),
-            Criteria(
-                name="next_speaker",
-                prompt_msg=f"Who should speak next? (select from: {names})",
-                answer_spec=f"string (select from: {names})",
-            ),
-            Criteria(
-                name="instruction_or_question",
-                prompt_msg="What instruction or question would you give this team member? (Phrase as if speaking directly to them, and include any specific information they may need)",
-                answer_spec="string",
-            ),
-        ]
-
+    def _think_next_step(
+        self, criteria_list: List[Criteria], task: str, team: str, names: List[str], sender: Optional[Agent]
+    ):
         bullet_points = "\n".join([criteria.to_bullet_point() for criteria in criteria_list])
         inner_json = ",\n".join([criteria.to_json_schema_str() for criteria in criteria_list])
         json_schema = f"{{\n{inner_json}\n}}"
@@ -229,7 +210,7 @@ class Orchestrator(ConversableAgent):
         self._print_thought(json.dumps(next_step, indent=4))
         return next_step
 
-    def _prepare_new_facts_and_plan(self, facts, sender:Optional[Agent], team):
+    def _prepare_new_facts_and_plan(self, facts, sender: Optional[Agent], team):
         self._print_thought("We aren't making progress. Let's reset.")
         new_facts_prompt = self._prompt_templates["rethink_facts"].substitute(prev_facts=facts).strip()
         facts = self._think_and_respond(self.orchestrated_messages, new_facts_prompt, sender)
@@ -266,7 +247,7 @@ class Orchestrator(ConversableAgent):
                 self._broadcast(reply, exclude=[a])
                 break
 
-    def _update_team_with_facts_and_plan(self, task:str, team:str, facts:str, plan:str):
+    def _update_team_with_facts_and_plan(self, task: str, team: str, facts: str, plan: str):
         team_update_prompt = (
             self._prompt_templates["team_update"].substitute(task=task, team=team, facts=facts, plan=plan).strip()
         )
@@ -276,7 +257,7 @@ class Orchestrator(ConversableAgent):
 
     # proc_next_step -> decision_to_terminate -> move to state of termination
     @staticmethod
-    def decision_to_terminate(CURRENT_STATE:str, context: Dict):
+    def decision_to_terminate(CURRENT_STATE: str, context: Dict):
         next_step = context["next_step"]
         if next_step["is_request_satisfied"]["answer"]:
             # return True, "TERMINATE"
@@ -285,7 +266,7 @@ class Orchestrator(ConversableAgent):
 
     # proc_next_step -> update_local_state -> continue/reset_current_run_with_introspect
     @staticmethod
-    def stall_update_and_check(CURRENT_STATE:str, context: Dict):
+    def stall_update_and_check(CURRENT_STATE: str, context: Dict):
         next_step = context["next_step"]
         if "stalled_count" not in context:
             context["stalled_count"] = 0
@@ -360,6 +341,28 @@ class Orchestrator(ConversableAgent):
             CURRENT_STATE = "OBTAIN_NEXTSTEP"
             context = {}
             context["PRE_EXECUTION_HOOKS"] = [Orchestrator.decision_to_terminate, Orchestrator.stall_update_and_check]
+            criteria_list = [
+                Criteria(
+                    name="is_request_satisfied",
+                    prompt_msg="Is the request fully satisfied? (True if complete, or False if the original request has yet to be SUCCESSFULLY addressed)",
+                    answer_spec="boolean",
+                ),
+                Criteria(
+                    name="is_progress_being_made",
+                    prompt_msg="Are we making forward progress? (True if just starting, or recent messages are adding value. False if recent messages show evidence of being stuck in a reasoning or action loop, or there is evidence of significant barriers to success such as the inability to read from a required file)",
+                    answer_spec="boolean",
+                ),
+                Criteria(
+                    name="next_speaker",
+                    prompt_msg=f"Who should speak next? (select from: {names})",
+                    answer_spec=f"string (select from: {names})",
+                ),
+                Criteria(
+                    name="instruction_or_question",
+                    prompt_msg="What instruction or question would you give this team member? (Phrase as if speaking directly to them, and include any specific information they may need)",
+                    answer_spec="string",
+                ),
+            ]
 
             # Inner loop
             while total_turns < max_turns:
@@ -369,7 +372,14 @@ class Orchestrator(ConversableAgent):
                 if CURRENT_STATE == "OBTAIN_NEXTSTEP":
                     total_turns += 1
                     try:
-                        context["next_step"] = self._think_next_step(self, task=METADATA["task"], team=METADATA["team"], names=METADATA["names"], sender=sender)
+                        context["next_step"] = self._think_next_step(
+                            self,
+                            criteria_list=criteria_list,
+                            task=METADATA["task"],
+                            team=METADATA["team"],
+                            names=METADATA["names"],
+                            sender=sender,
+                        )
                         CURRENT_STATE = "PRE_EXECUTION_NEXTSTEP"
                         continue
                     except json.decoder.JSONDecodeError as e:
@@ -384,7 +394,7 @@ class Orchestrator(ConversableAgent):
 
                         if CURRENT_STATE in ("TERMINATE_TRUE", "RESET", "INTROSPECT_AND_RESET"):
                             break
-                    
+
                     if "PRE_EXECUTION_NEXTSTEP" == CURRENT_STATE:
                         CURRENT_STATE = "EXECUTE_NEXTSTEP"
                         continue
@@ -399,17 +409,17 @@ class Orchestrator(ConversableAgent):
                     )
                     CURRENT_STATE = "POST_EXECUTION_NEXTSTEP"
                     continue
-                
+
                 elif CURRENT_STATE == "POST_EXECUTION_NEXTSTEP":
                     CURRENT_STATE = "OBTAIN_NEXTSTEP"
                     continue
 
-
                 ### RESET STATE / TERMINATE ###
 
-
                 if CURRENT_STATE == "INTROSPECT_AND_RESET":
-                    METADATA["facts"], METADATA["plan"] = self._prepare_new_facts_and_plan(facts=METADATA["facts"], sender=sender, team=METADATA["team"])
+                    METADATA["facts"], METADATA["plan"] = self._prepare_new_facts_and_plan(
+                        facts=METADATA["facts"], sender=sender, team=METADATA["team"]
+                    )
                     CURRENT_STATE = "RESET"
 
                 if CURRENT_STATE == "TERMINATE_TRUE":
