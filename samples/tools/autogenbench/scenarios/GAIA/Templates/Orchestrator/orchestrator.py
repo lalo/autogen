@@ -5,6 +5,7 @@ from string import Template
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Type, TypeVar, Union, Callable, Literal, Tuple, TypedDict
 from autogen import Agent, ConversableAgent, OpenAIWrapper
+import logging
 
 
 class OrchestratorPromptTemplates(TypedDict):
@@ -368,7 +369,9 @@ class Orchestrator(ConversableAgent):
             while total_turns < max_turns:
                 total_turns += 1
 
-                # state of next_step -> proc_next_step/reset_current_run_without_introspect
+                PREVIOUS_STATE = CURRENT_STATE
+
+                # obtain next step
                 if CURRENT_STATE == "OBTAIN_NEXTSTEP":
                     total_turns += 1
                     try:
@@ -388,21 +391,23 @@ class Orchestrator(ConversableAgent):
                         # break
                         CURRENT_STATE = "RESET"
 
+                # before 'executing' the next step we run registered funcs
                 elif CURRENT_STATE == "PRE_EXECUTION_NEXTSTEP":
                     for func in context["PRE_EXECUTION_HOOKS"]:
+                        logging.info(f"{CURRENT_STATE}: Running {func.__module__}:{func.__name__}")
                         CURRENT_STATE = func(CURRENT_STATE, context)
 
+                        # hooks are able to early exit, or 'fail' and ask for a reset
                         if CURRENT_STATE in ("TERMINATE_TRUE", "RESET", "INTROSPECT_AND_RESET"):
+                            logging.info(f"{CURRENT_STATE}: Breaking out of loop")
                             break
 
                     if "PRE_EXECUTION_NEXTSTEP" == CURRENT_STATE:
                         CURRENT_STATE = "EXECUTE_NEXTSTEP"
                         continue
-                    # check if satisfied, check if progress, break or exit or continue
 
+                # we actually 'execute' the next step
                 elif CURRENT_STATE == "EXECUTE_NEXTSTEP":
-                    # actual execution of next step
-                    # next_state json -> move_conversation_forward -> move to state of next_step
                     self._broadcast_next_step_and_request_reply(
                         next_prompt=context["next_step"]["instruction_or_question"]["answer"],
                         next_speaker=context["next_step"]["next_speaker"]["answer"],
@@ -410,9 +415,12 @@ class Orchestrator(ConversableAgent):
                     CURRENT_STATE = "POST_EXECUTION_NEXTSTEP"
                     continue
 
+                # after 'executing' the next step we run registered funcs
                 elif CURRENT_STATE == "POST_EXECUTION_NEXTSTEP":
                     CURRENT_STATE = "OBTAIN_NEXTSTEP"
                     continue
+
+                logging.info(f"Moved from {PREVIOUS_STATE} to {CURRENT_STATE}")
 
                 ### RESET STATE / TERMINATE ###
 
