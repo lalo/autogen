@@ -105,6 +105,8 @@ class Criteria:
     name: str
     prompt_msg: str
     answer_spec: str
+    pre_execute_hook: Optional[Callable] = None
+    post_execute_hook: Optional[Callable] = None
 
     def to_bullet_point(self):
         return f"    - {self.prompt_msg}"
@@ -341,22 +343,23 @@ class Orchestrator(ConversableAgent):
 
             CURRENT_STATE = "OBTAIN_NEXTSTEP"
             context = {}
-            context["PRE_EXECUTION_HOOKS"] = [Orchestrator.decision_to_terminate, Orchestrator.stall_update_and_check]
             criteria_list = [
                 Criteria(
                     name="is_request_satisfied",
                     prompt_msg="Is the request fully satisfied? (True if complete, or False if the original request has yet to be SUCCESSFULLY addressed)",
                     answer_spec="boolean",
+                    pre_execute_hook=Orchestrator.decision_to_terminate,
                 ),
                 Criteria(
                     name="is_progress_being_made",
                     prompt_msg="Are we making forward progress? (True if just starting, or recent messages are adding value. False if recent messages show evidence of being stuck in a reasoning or action loop, or there is evidence of significant barriers to success such as the inability to read from a required file)",
                     answer_spec="boolean",
+                    pre_execute_hook=Orchestrator.stall_update_and_check,
                 ),
                 Criteria(
                     name="next_speaker",
-                    prompt_msg=f"Who should speak next? (select from: {names})",
-                    answer_spec=f"string (select from: {names})",
+                    prompt_msg=f"Who should speak next? (select from: {METADATA['names']})",
+                    answer_spec=f"string (select from: {METADATA['names']})",
                 ),
                 Criteria(
                     name="instruction_or_question",
@@ -393,7 +396,10 @@ class Orchestrator(ConversableAgent):
 
                 # before 'executing' the next step we run registered funcs
                 elif CURRENT_STATE == "PRE_EXECUTION_NEXTSTEP":
-                    for func in context["PRE_EXECUTION_HOOKS"]:
+                    for criteria in criteria_list:
+                        func = criteria.pre_execute_hook
+                        if func is None:
+                            continue
                         logging.info(f"{CURRENT_STATE}: Running {func.__module__}:{func.__name__}")
                         CURRENT_STATE = func(CURRENT_STATE, context)
 
