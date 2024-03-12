@@ -101,7 +101,7 @@ $team
 
 
 @dataclass
-class Criteria:
+class NextStepCriteria:
     name: str
     prompt_msg: str
     answer_spec: str
@@ -119,6 +119,7 @@ class Criteria:
 
 
 OT = TypeVar("OT", bound="Orchestrator")
+
 
 class Quantifier(AssistantAgent):
     def __init__(
@@ -156,6 +157,7 @@ task = $task_json\n"""
         }
         reply = self.generate_reply(messages=[message])
         return reply
+
 
 class Orchestrator(ConversableAgent):
     def __init__(
@@ -226,7 +228,7 @@ class Orchestrator(ConversableAgent):
         return extracted_response
 
     def _think_next_step(
-        self, criteria_list: List[Criteria], task: str, team: str, names: List[str], sender: Optional[Agent]
+        self, criteria_list: List[NextStepCriteria], task: str, team: str, names: List[str], sender: Optional[Agent]
     ):
         bullet_points = "\n".join([criteria.to_bullet_point() for criteria in criteria_list])
         inner_json = ",\n".join([criteria.to_json_schema_str() for criteria in criteria_list])
@@ -383,24 +385,24 @@ class Orchestrator(ConversableAgent):
             CURRENT_STATE = "OBTAIN_NEXTSTEP"
             context = {}
             criteria_list = [
-                Criteria(
+                NextStepCriteria(
                     name="is_request_satisfied",
                     prompt_msg="Is the request fully satisfied? (True if complete, or False if the original request has yet to be SUCCESSFULLY addressed)",
                     answer_spec="boolean",
                     pre_execute_hook=Orchestrator.decision_to_terminate,
                 ),
-                Criteria(
+                NextStepCriteria(
                     name="is_progress_being_made",
                     prompt_msg="Are we making forward progress? (True if just starting, or recent messages are adding value. False if recent messages show evidence of being stuck in a reasoning or action loop, or there is evidence of significant barriers to success such as the inability to read from a required file)",
                     answer_spec="boolean",
                     pre_execute_hook=Orchestrator.stall_update_and_check,
                 ),
-                Criteria(
+                NextStepCriteria(
                     name="next_speaker",
                     prompt_msg=f"Who should speak next? (select from: {METADATA['names']})",
                     answer_spec=f"string (select from: {METADATA['names']})",
                 ),
-                Criteria(
+                NextStepCriteria(
                     name="instruction_or_question",
                     prompt_msg="What instruction or question would you give this team member? (Phrase as if speaking directly to them, and include any specific information they may need)",
                     answer_spec="string",
@@ -425,7 +427,6 @@ class Orchestrator(ConversableAgent):
                             sender=sender,
                         )
                         CURRENT_STATE = "PRE_EXECUTION_NEXTSTEP"
-                        continue
                     except json.decoder.JSONDecodeError as e:
                         # Something went wrong. Restart this loop.
                         self._print_thought(str(e))
