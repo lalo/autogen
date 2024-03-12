@@ -227,19 +227,20 @@ class Orchestrator(ConversableAgent):
         messages.append({"role": "assistant", "content": extracted_response, "name": self.name})
         return extracted_response
 
-    def _think_next_step(
-        self, criteria_list: List[NextStepCriteria], task: str, team: str, names: List[str], sender: Optional[Agent]
-    ):
+    @staticmethod
+    def generate_next_step_prompt(
+        prompt_template: Template, criteria_list: List[NextStepCriteria], task: str, team: str
+    ) -> str:
         bullet_points = "\n".join([criteria.to_bullet_point() for criteria in criteria_list])
         inner_json = ",\n".join([criteria.to_json_schema_str() for criteria in criteria_list])
         json_schema = f"{{\n{inner_json}\n}}"
 
-        step_prompt = (
-            self._prompt_templates["step_prompt"]
-            .substitute(task=task, team=team, bullet_points=bullet_points, json_schema=json_schema)
-            .strip()
-        )
+        step_prompt = prompt_template.substitute(
+            task=task, team=team, bullet_points=bullet_points, json_schema=json_schema
+        ).strip()
+        return step_prompt
 
+    def _think_next_step(self, step_prompt: str, sender: Optional[Agent]):
         # This is a temporary message we will immediately pop
         self.orchestrated_messages.append({"role": "user", "content": step_prompt, "name": sender.name})
         response = self.client.create(
@@ -291,10 +292,13 @@ class Orchestrator(ConversableAgent):
                 self._broadcast(reply, exclude=[a])
                 break
 
-    def _update_team_with_facts_and_plan(self, task: str, team: str, facts: str, plan: str, **kwargs):
-        team_update_prompt = (
-            self._prompt_templates["team_update"].substitute(task=task, team=team, facts=facts, plan=plan).strip()
-        )
+    @staticmethod
+    def generate_team_update_prompt(
+        prompt_template: Template, task: str, team: str, facts: str, plan: str, **kwargs
+    ) -> str:
+        return prompt_template.substitute(task=task, team=team, facts=facts, plan=plan).strip()
+
+    def _update_team_with_facts_and_plan(self, team_update_prompt: str):
         self.orchestrated_messages.append({"role": "assistant", "content": team_update_prompt, "name": self.name})
         self._broadcast(self.orchestrated_messages[-1])
         self._print_thought(self.orchestrated_messages[-1]["content"])
@@ -380,7 +384,10 @@ class Orchestrator(ConversableAgent):
             for a in self._agents:
                 a.reset()
 
-            self._update_team_with_facts_and_plan(**METADATA)
+            team_update_prompt = Orchestrator.generate_team_update_prompt(
+                prompt_template=self._prompt_templates["team_update"], **METADATA
+            )
+            self._update_team_with_facts_and_plan(team_update_prompt=team_update_prompt)
 
             CURRENT_STATE = "OBTAIN_NEXTSTEP"
             context = {}
@@ -419,11 +426,14 @@ class Orchestrator(ConversableAgent):
                 if CURRENT_STATE == "OBTAIN_NEXTSTEP":
                     total_turns += 1
                     try:
-                        context["next_step"] = self._think_next_step(
+                        step_prompt = Orchestrator.generate_next_step_prompt(
+                            prompt_template=self._prompt_templates["step_prompt"],
                             criteria_list=criteria_list,
                             task=METADATA["task"],
                             team=METADATA["team"],
-                            names=METADATA["names"],
+                        )
+                        context["next_step"] = self._think_next_step(
+                            step_prompt=step_prompt,
                             sender=sender,
                         )
                         CURRENT_STATE = "PRE_EXECUTION_NEXTSTEP"
