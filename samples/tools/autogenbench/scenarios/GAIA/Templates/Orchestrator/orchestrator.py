@@ -100,6 +100,27 @@ $team
 }
 
 
+class TemplateUtils:
+    @staticmethod
+    def generate_next_step_prompt(
+        prompt_template: Template, criteria_list: List[NextStepCriteria], task: str, team: str
+    ) -> str:
+        bullet_points = "\n".join([criteria.to_bullet_point() for criteria in criteria_list])
+        inner_json = ",\n".join([criteria.to_json_schema_str() for criteria in criteria_list])
+        json_schema = f"{{\n{inner_json}\n}}"
+
+        step_prompt = prompt_template.substitute(
+            task=task, team=team, bullet_points=bullet_points, json_schema=json_schema
+        ).strip()
+        return step_prompt
+
+    @staticmethod
+    def generate_team_update_prompt(
+        prompt_template: Template, task: str, team: str, facts: str, plan: str, **kwargs
+    ) -> str:
+        return prompt_template.substitute(task=task, team=team, facts=facts, plan=plan).strip()
+
+
 @dataclass
 class NextStepCriteria:
     name: str
@@ -157,6 +178,36 @@ task = $task_json\n"""
         }
         reply = self.generate_reply(messages=[message])
         return reply
+
+
+class DefaultStateMachineTransitions:
+    # proc_next_step -> decision_to_terminate -> move to state of termination
+    @staticmethod
+    def decision_to_terminate(CURRENT_STATE: str, context: Dict):
+        next_step = context["next_step"]
+        if next_step["is_request_satisfied"]["answer"]:
+            # return True, "TERMINATE"
+            CURRENT_STATE = "TERMINATE_TRUE"
+        return CURRENT_STATE
+
+    # proc_next_step -> update_local_state -> continue/reset_current_run_with_introspect
+    @staticmethod
+    def stall_update_and_check(CURRENT_STATE: str, context: Dict):
+        next_step = context["next_step"]
+        if "stalled_count" not in context:
+            context["stalled_count"] = 0
+
+        if next_step["is_progress_being_made"]["answer"]:
+            context["stalled_count"] -= 1
+            context["stalled_count"] = max(context["stalled_count"], 0)
+        else:
+            context["stalled_count"] += 1
+
+        if context["stalled_count"] >= 3:
+            # facts, plan = self._prepare_new_facts_and_plan(facts=facts, sender=sender, team=team)
+            # break
+            CURRENT_STATE = "INTROSPECT_AND_RESET"
+        return CURRENT_STATE
 
 
 class Orchestrator(ConversableAgent):
@@ -227,19 +278,6 @@ class Orchestrator(ConversableAgent):
         messages.append({"role": "assistant", "content": extracted_response, "name": self.name})
         return extracted_response
 
-    @staticmethod
-    def generate_next_step_prompt(
-        prompt_template: Template, criteria_list: List[NextStepCriteria], task: str, team: str
-    ) -> str:
-        bullet_points = "\n".join([criteria.to_bullet_point() for criteria in criteria_list])
-        inner_json = ",\n".join([criteria.to_json_schema_str() for criteria in criteria_list])
-        json_schema = f"{{\n{inner_json}\n}}"
-
-        step_prompt = prompt_template.substitute(
-            task=task, team=team, bullet_points=bullet_points, json_schema=json_schema
-        ).strip()
-        return step_prompt
-
     def _think_next_step(self, step_prompt: str, sender: Optional[Agent]):
         # This is a temporary message we will immediately pop
         self.orchestrated_messages.append({"role": "user", "content": step_prompt, "name": sender.name})
@@ -292,44 +330,10 @@ class Orchestrator(ConversableAgent):
                 self._broadcast(reply, exclude=[a])
                 break
 
-    @staticmethod
-    def generate_team_update_prompt(
-        prompt_template: Template, task: str, team: str, facts: str, plan: str, **kwargs
-    ) -> str:
-        return prompt_template.substitute(task=task, team=team, facts=facts, plan=plan).strip()
-
     def _update_team_with_facts_and_plan(self, team_update_prompt: str):
         self.orchestrated_messages.append({"role": "assistant", "content": team_update_prompt, "name": self.name})
         self._broadcast(self.orchestrated_messages[-1])
         self._print_thought(self.orchestrated_messages[-1]["content"])
-
-    # proc_next_step -> decision_to_terminate -> move to state of termination
-    @staticmethod
-    def decision_to_terminate(CURRENT_STATE: str, context: Dict):
-        next_step = context["next_step"]
-        if next_step["is_request_satisfied"]["answer"]:
-            # return True, "TERMINATE"
-            CURRENT_STATE = "TERMINATE_TRUE"
-        return CURRENT_STATE
-
-    # proc_next_step -> update_local_state -> continue/reset_current_run_with_introspect
-    @staticmethod
-    def stall_update_and_check(CURRENT_STATE: str, context: Dict):
-        next_step = context["next_step"]
-        if "stalled_count" not in context:
-            context["stalled_count"] = 0
-
-        if next_step["is_progress_being_made"]["answer"]:
-            context["stalled_count"] -= 1
-            context["stalled_count"] = max(context["stalled_count"], 0)
-        else:
-            context["stalled_count"] += 1
-
-        if context["stalled_count"] >= 3:
-            # facts, plan = self._prepare_new_facts_and_plan(facts=facts, sender=sender, team=team)
-            # break
-            CURRENT_STATE = "INTROSPECT_AND_RESET"
-        return CURRENT_STATE
 
     def run_chat(
         self,
@@ -384,7 +388,7 @@ class Orchestrator(ConversableAgent):
             for a in self._agents:
                 a.reset()
 
-            team_update_prompt = Orchestrator.generate_team_update_prompt(
+            team_update_prompt = TemplateUtils.generate_team_update_prompt(
                 prompt_template=self._prompt_templates["team_update"], **METADATA
             )
             self._update_team_with_facts_and_plan(team_update_prompt=team_update_prompt)
@@ -396,13 +400,13 @@ class Orchestrator(ConversableAgent):
                     name="is_request_satisfied",
                     prompt_msg="Is the request fully satisfied? (True if complete, or False if the original request has yet to be SUCCESSFULLY addressed)",
                     answer_spec="boolean",
-                    pre_execute_hook=Orchestrator.decision_to_terminate,
+                    pre_execute_hook=DefaultStateMachineTransitions.decision_to_terminate,
                 ),
                 NextStepCriteria(
                     name="is_progress_being_made",
                     prompt_msg="Are we making forward progress? (True if just starting, or recent messages are adding value. False if recent messages show evidence of being stuck in a reasoning or action loop, or there is evidence of significant barriers to success such as the inability to read from a required file)",
                     answer_spec="boolean",
-                    pre_execute_hook=Orchestrator.stall_update_and_check,
+                    pre_execute_hook=DefaultStateMachineTransitions.stall_update_and_check,
                 ),
                 NextStepCriteria(
                     name="next_speaker",
@@ -426,7 +430,7 @@ class Orchestrator(ConversableAgent):
                 if CURRENT_STATE == "OBTAIN_NEXTSTEP":
                     total_turns += 1
                     try:
-                        step_prompt = Orchestrator.generate_next_step_prompt(
+                        step_prompt = TemplateUtils.generate_next_step_prompt(
                             prompt_template=self._prompt_templates["step_prompt"],
                             criteria_list=criteria_list,
                             task=METADATA["task"],
