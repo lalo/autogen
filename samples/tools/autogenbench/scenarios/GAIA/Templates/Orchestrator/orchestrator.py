@@ -4,7 +4,7 @@ import copy
 from string import Template
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Type, TypeVar, Union, Callable, Literal, Tuple, TypedDict
-from autogen import Agent, ConversableAgent, OpenAIWrapper
+from autogen import Agent, ConversableAgent, OpenAIWrapper, AssistantAgent
 import logging
 
 
@@ -120,6 +120,42 @@ class Criteria:
 
 OT = TypeVar("OT", bound="Orchestrator")
 
+class Quantifier(AssistantAgent):
+    def __init__(
+        self, name: str, llm_config: Optional[Union[Dict, Literal[False]]], system_message: str = None, **kwargs
+    ):
+        llm_config = copy.deepcopy(llm_config)
+        llm_config["max_retries"] = 10
+        if system_message is None:
+            system_message = """You are a helpful assistant. You quantify the output of different tasks based on the given criteria. 
+        The criterion is given in a dictionary format where each key is a distinct criteria. 
+        The value of each key is a dictionary as follows {"description": criteria description , "accepted_values": possible accepted inputs for this key} 
+        You are going to quantify each of the criteria for a given task based on the task description. 
+        Return a dictionary where the keys are the criteria and the values are the assessed performance based on accepted values for each criteria. 
+        Return only the dictionary."""
+        super().__init__(name=name, llm_config=llm_config, system_message=system_message, **kwargs)
+
+    def quantify(self) -> str:
+        criterion = {
+            "TERMINATE": {
+                "description": "If we have a correct answer - is it ok to terminate?",
+                "accepted_values": ["Appropriate", "Inappropriate"],
+            }
+        }
+        task = {"question:": "2+2", "answer": "4"}
+
+        quantifyTemplate = Template(
+            f"""criterion = $criterion_json
+task = $task_json\n"""
+        )
+
+        message = {
+            "role": "user",
+            "content": quantifyTemplate.substitute(criterion_json=json.dumps(criterion), task_json=json.dumps(task)),
+            "name": "user",
+        }
+        reply = self.generate_reply(messages=[message])
+        return reply
 
 class Orchestrator(ConversableAgent):
     def __init__(
@@ -134,7 +170,7 @@ class Orchestrator(ConversableAgent):
         llm_config: Optional[Union[Dict, Literal[False]]] = False,
         default_auto_reply: Optional[Union[str, Dict, None]] = "",
         prompt_templates: OrchestratorPromptTemplates = defaultPromptTemplates,
-        quantifier: ConversableAgent = None,
+        quantifier: Quantifier = None,
     ):
         super().__init__(
             name=name,
@@ -160,7 +196,7 @@ class Orchestrator(ConversableAgent):
 
         self._prompt_templates = prompt_templates
 
-        self._quantifier = quantifier
+        self._quantifier: Quantifier = quantifier
 
     def _print_thought(self, message):
         print(self.name + " (thought)\n")
@@ -439,12 +475,7 @@ class Orchestrator(ConversableAgent):
                     CURRENT_STATE = "RESET"
 
                 if CURRENT_STATE == "TERMINATE_TRUE":
-                    m = {
-                        "role": "user",
-                        "content": 'Criteria: TERMINATE\nAccepted {"accepted_values": ["Appropriate", "Inappropriate"]\n, "description": "If we have a correct answer - is it ok to terminate?" task: 2+2=4}',
-                        "name": self.name,
-                    }
-                    reply = self._quantifier.generate_reply(messages=[m], sender=self)
+                    reply = self._quantifier.quantify()
                     print("*******")
                     print(reply)
                     return True, "TERMINATE"

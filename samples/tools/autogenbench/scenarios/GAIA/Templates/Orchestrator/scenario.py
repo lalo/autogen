@@ -11,7 +11,7 @@ import testbed_utils
 from autogen.agentchat.contrib.web_surfer import WebSurferAgent
 from autogen.token_count_utils import count_token, get_max_token_limit
 from autogen.mdconvert import MarkdownConverter, UnsupportedFormatException
-from orchestrator import Orchestrator
+from orchestrator import Orchestrator, Quantifier
 
 testbed_utils.init()
 ##############################
@@ -160,15 +160,9 @@ web_surfer = WebSurferAgent(
     },
 )
 
-quantifier = autogen.AssistantAgent(
-    name="quantifier",
-    llm_config={"config_list": config_list, "max_retries": 10},
-    system_message="""You are a helpful assistant. You quantify the output of different tasks based on the given criteria. 
-The criterion is given in a dictionary format where each key is a distinct criteria. 
-The value of each key is a dictionary as follows {"description": criteria description , "accepted_values": possible accepted inputs for this key} 
-You are going to quantify each of the criteria for a given task based on the task description. 
-Return a dictionary where the keys are the criteria and the values are the assessed performance based on accepted values for each criteria. 
-Return only the dictionary.""",
+quantifier = Quantifier(
+    "quantifier",
+    llm_config={"config_list": config_list},
 )
 
 maestro = Orchestrator(
