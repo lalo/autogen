@@ -1,17 +1,15 @@
 # ruff: noqa: E722
 import os
-import sys
-import json
 import autogen
 import copy
 import traceback
 import re
-from datetime import datetime
 import testbed_utils
 from autogen.agentchat.contrib.web_surfer import WebSurferAgent
 from autogen.token_count_utils import count_token, get_max_token_limit
 from autogen.mdconvert import MarkdownConverter, UnsupportedFormatException
 from orchestrator import Orchestrator, Quantifier
+from reflection_util import ReflectionUtil
 
 testbed_utils.init()
 ##############################
@@ -123,13 +121,18 @@ If you are asked for a comma separated list, apply the above rules depending on 
         return extracted_response
 
 
-assistant = autogen.AssistantAgent(
+TracedAssistantAgent = ReflectionUtil.add_tracing_to_class(autogen.AssistantAgent)
+assistant = TracedAssistantAgent(
     "assistant",
     is_termination_msg=lambda x: x.get("content", "").rstrip().find("TERMINATE") >= 0,
     code_execution_config=False,
     llm_config=llm_config,
 )
-user_proxy = autogen.UserProxyAgent(
+ReflectionUtil.wrap_reply_funcs(assistant)
+ReflectionUtil.replace_conversable_agent_properties(assistant)
+
+TracedUserProxyAgent = ReflectionUtil.add_tracing_to_class(autogen.UserProxyAgent)
+user_proxy = TracedUserProxyAgent(
     "computer_terminal",
     human_input_mode="NEVER",
     description="A computer terminal that performs no other action than running Python scripts (provided to it quoted in ```python code blocks), or sh shell scripts (provided to it quoted in ```sh code blocks)",
@@ -141,10 +144,13 @@ user_proxy = autogen.UserProxyAgent(
     default_auto_reply="",
     max_consecutive_auto_reply=15,
 )
+ReflectionUtil.wrap_reply_funcs(user_proxy)
+ReflectionUtil.replace_conversable_agent_properties(user_proxy)
 
 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0"
+TracedWebSurferAgent = ReflectionUtil.add_tracing_to_class(WebSurferAgent)
 
-web_surfer = WebSurferAgent(
+web_surfer = TracedWebSurferAgent(
     "web_surfer",
     llm_config=llm_config,
     summarizer_llm_config=summarizer_llm_config,
@@ -160,12 +166,20 @@ web_surfer = WebSurferAgent(
     },
 )
 
+ReflectionUtil.wrap_reply_funcs(web_surfer)
+ReflectionUtil.replace_conversable_agent_properties(web_surfer)
+
 quantifier = Quantifier(
     "quantifier",
     llm_config={"config_list": config_list},
 )
+ReflectionUtil.wrap_reply_funcs(quantifier)
+ReflectionUtil.replace_conversable_agent_properties(quantifier)
 
-maestro = Orchestrator(
+TracedOrchestrator = ReflectionUtil.add_tracing_to_class(
+    Orchestrator, detailed={"_broadcast_next_step_and_request_reply": ["next_speaker"]}
+)
+maestro = TracedOrchestrator(
     "orchestrator",
     agents=[assistant, user_proxy, web_surfer],
     llm_config=llm_config,
