@@ -1,4 +1,5 @@
 # ruff: noqa: E722
+from datetime import datetime
 import json
 import copy
 from string import Template
@@ -100,6 +101,24 @@ $team
 }
 
 
+@dataclass
+class NextStepCriteria:
+    name: str
+    prompt_msg: str
+    answer_spec: str
+    pre_execute_hook: Optional[Callable] = None
+    post_execute_hook: Optional[Callable] = None
+
+    def to_bullet_point(self):
+        return f"    - {self.prompt_msg}"
+
+    def to_json_schema_str(self):
+        return f"""    "{self.name}": {{
+        "reason": string,
+        "answer": {self.answer_spec}
+    }}"""
+
+
 class TemplateUtils:
     @staticmethod
     def generate_next_step_prompt(
@@ -119,27 +138,6 @@ class TemplateUtils:
         prompt_template: Template, task: str, team: str, facts: str, plan: str, **kwargs
     ) -> str:
         return prompt_template.substitute(task=task, team=team, facts=facts, plan=plan).strip()
-
-
-@dataclass
-class NextStepCriteria:
-    name: str
-    prompt_msg: str
-    answer_spec: str
-    pre_execute_hook: Optional[Callable] = None
-    post_execute_hook: Optional[Callable] = None
-
-    def to_bullet_point(self):
-        return f"    - {self.prompt_msg}"
-
-    def to_json_schema_str(self):
-        return f"""    "{self.name}": {{
-        "reason": string,
-        "answer": {self.answer_spec}
-    }}"""
-
-
-OT = TypeVar("OT", bound="Orchestrator")
 
 
 class Quantifier(AssistantAgent):
@@ -454,6 +452,7 @@ class Orchestrator(ConversableAgent):
                         if func is None:
                             continue
                         logging.info(f"{CURRENT_STATE}: Running {func.__module__}:{func.__name__}")
+                        print(f"%%% {datetime.now()} orchestrator [state machine] {CURRENT_STATE}: Running {func.__module__}:{func.__name__}")
                         CURRENT_STATE = func(CURRENT_STATE, context)
 
                         # hooks are able to early exit, or 'fail' and ask for a reset
@@ -463,7 +462,6 @@ class Orchestrator(ConversableAgent):
 
                     if "PRE_EXECUTION_NEXTSTEP" == CURRENT_STATE:
                         CURRENT_STATE = "EXECUTE_NEXTSTEP"
-                        continue
 
                 # we actually 'execute' the next step
                 elif CURRENT_STATE == "EXECUTE_NEXTSTEP":
@@ -472,14 +470,13 @@ class Orchestrator(ConversableAgent):
                         next_speaker=context["next_step"]["next_speaker"]["answer"],
                     )
                     CURRENT_STATE = "POST_EXECUTION_NEXTSTEP"
-                    continue
 
                 # after 'executing' the next step we run registered funcs
                 elif CURRENT_STATE == "POST_EXECUTION_NEXTSTEP":
                     CURRENT_STATE = "OBTAIN_NEXTSTEP"
-                    continue
 
                 logging.info(f"Moved from {PREVIOUS_STATE} to {CURRENT_STATE}")
+                print(f"%%% {datetime.now()} orchestrator [state machine] from {PREVIOUS_STATE} to {CURRENT_STATE}")
 
                 ### RESET STATE / TERMINATE ###
 

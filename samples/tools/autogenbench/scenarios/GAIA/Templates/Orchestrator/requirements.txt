@@ -1,4 +1,4 @@
-pyautogen[websurfer] @ git+https://github.com/microsoft/autogen@ct_orchestrator
+/autogen[websurfer]
 youtube_transcript_api
 mammoth
 puremagic
