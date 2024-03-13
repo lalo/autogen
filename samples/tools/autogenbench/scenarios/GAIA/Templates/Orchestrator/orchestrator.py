@@ -420,8 +420,6 @@ class Orchestrator(ConversableAgent):
 
             # Inner loop
             while total_turns < max_turns:
-                total_turns += 1
-
                 PREVIOUS_STATE = CURRENT_STATE
 
                 # obtain next step
@@ -476,7 +474,7 @@ class Orchestrator(ConversableAgent):
                     CURRENT_STATE = "OBTAIN_NEXTSTEP"
 
                 logging.info(f"Moved from {PREVIOUS_STATE} to {CURRENT_STATE}")
-                print(f"%%% {datetime.now()} orchestrator [state machine] from {PREVIOUS_STATE} to {CURRENT_STATE}")
+                print(f"%%% {datetime.now()} orchestrator [state machine] from {PREVIOUS_STATE} to {CURRENT_STATE} Current turn: {total_turns}")
 
                 ### RESET STATE / TERMINATE ###
 
