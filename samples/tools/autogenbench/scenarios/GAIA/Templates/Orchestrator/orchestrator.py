@@ -450,7 +450,9 @@ class Orchestrator(ConversableAgent):
                         if func is None:
                             continue
                         logging.info(f"{CURRENT_STATE}: Running {func.__module__}:{func.__name__}")
-                        print(f"%%% {datetime.now()} orchestrator [state machine] {CURRENT_STATE}: Running {func.__module__}:{func.__name__}")
+                        print(
+                            f"%%% {datetime.now()} orchestrator [state machine] {CURRENT_STATE}: Running {func.__module__}:{func.__name__}"
+                        )
                         CURRENT_STATE = func(CURRENT_STATE, context)
 
                         # hooks are able to early exit, or 'fail' and ask for a reset
@@ -474,7 +476,9 @@ class Orchestrator(ConversableAgent):
                     CURRENT_STATE = "OBTAIN_NEXTSTEP"
 
                 logging.info(f"Moved from {PREVIOUS_STATE} to {CURRENT_STATE}")
-                print(f"%%% {datetime.now()} orchestrator [state machine] from {PREVIOUS_STATE} to {CURRENT_STATE} Current turn: {total_turns}")
+                print(
+                    f"%%% {datetime.now()} orchestrator [state machine] from {PREVIOUS_STATE} to {CURRENT_STATE} Current turn: {total_turns}"
+                )
 
                 ### RESET STATE / TERMINATE ###
 

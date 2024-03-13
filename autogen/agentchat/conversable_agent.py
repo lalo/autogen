@@ -172,7 +172,6 @@ class ConversableAgent(LLMAgent):
         )
         self._default_auto_reply = default_auto_reply
         self._reply_func_list = []
-        self._ignore_async_func_in_sync_chat_list = []
         self._human_input = []
         self.reply_at_receive = defaultdict(bool)
         self.register_reply([Agent, None], ConversableAgent.generate_oai_reply)
@@ -244,10 +243,7 @@ class ConversableAgent(LLMAgent):
     def code_executor(self) -> CodeExecutor:
         """The code executor used by this agent. Raise if code execution is disabled."""
         if not hasattr(self, "_code_executor"):
-            raise ValueError(
-                "No code executor as code execution is disabled. "
-                "To enable code execution, set code_execution_config."
-            )
+            return None
         return self._code_executor
 
     def register_reply(
@@ -316,10 +312,9 @@ class ConversableAgent(LLMAgent):
                 "config": copy.copy(config),
                 "init_config": config,
                 "reset_config": reset_config,
+                "ignore_async_in_sync_chat": ignore_async_in_sync_chat and inspect.iscoroutinefunction(reply_func),
             },
         )
-        if ignore_async_in_sync_chat and inspect.iscoroutinefunction(reply_func):
-            self._ignore_async_func_in_sync_chat_list.append(reply_func)
 
     @property
     def system_message(self) -> str:
@@ -736,9 +731,9 @@ class ConversableAgent(LLMAgent):
         Raises:
             RuntimeError: if any async reply functions are registered.
         """
-        reply_functions = {f["reply_func"] for f in self._reply_func_list}.difference(
-            self._ignore_async_func_in_sync_chat_list
-        )
+        reply_functions = {
+            f["reply_func"] for f in self._reply_func_list if not f.get("ignore_async_in_sync_chat", False)
+        }
 
         async_reply_functions = [f for f in reply_functions if inspect.iscoroutinefunction(f)]
         if async_reply_functions != []:
